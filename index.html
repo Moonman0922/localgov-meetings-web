@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Local Government Meetings → Calendar</title>
+<style>
+  :root { --ink:#1a2433; --muted:#5b6b7f; --line:#e2e8f0; --accent:#0b6b5b; --warn:#9a5b00; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:16px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+         color:var(--ink); background:#f7f9fb; }
+  .wrap { max-width:760px; margin:0 auto; padding:24px 18px 60px; }
+  header h1 { font-size:1.5rem; margin:.2em 0; }
+  header p { color:var(--muted); margin:.2em 0 1.2em; }
+  form { display:grid; gap:10px; background:#fff; border:1px solid var(--line);
+         border-radius:12px; padding:16px; }
+  label { font-size:.82rem; color:var(--muted); font-weight:600; }
+  input,select { width:100%; padding:10px 12px; border:1px solid var(--line);
+                 border-radius:8px; font-size:1rem; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; }
+  .row > div { flex:1; min-width:120px; }
+  button { background:var(--accent); color:#fff; border:0; border-radius:8px;
+           padding:11px 16px; font-size:1rem; font-weight:600; cursor:pointer; }
+  button.secondary { background:#fff; color:var(--accent); border:1px solid var(--accent); }
+  #status { margin:14px 0; color:var(--muted); font-size:.9rem; }
+  .meeting { background:#fff; border:1px solid var(--line); border-left:4px solid var(--accent);
+             border-radius:10px; padding:12px 14px; margin:10px 0; }
+  .meeting.unverified { border-left-color:var(--warn); }
+  .meeting .when { font-weight:700; }
+  .meeting .body { font-size:1.02rem; }
+  .meeting .meta { color:var(--muted); font-size:.86rem; margin-top:3px; }
+  .meeting a { color:var(--accent); text-decoration:none; margin-right:12px; font-size:.9rem; }
+  .pill { display:inline-block; font-size:.7rem; font-weight:700; padding:1px 7px;
+          border-radius:99px; background:#eef4f3; color:var(--accent); margin-left:6px; }
+  .pill.ai { background:#f0ecff; color:#5b3bd6; }
+  .pill.warn { background:#fdf0db; color:var(--warn); }
+  .tools { display:flex; gap:10px; flex-wrap:wrap; margin:6px 0 18px; }
+  .note { font-size:.82rem; color:var(--muted); }
+  details { margin-top:24px; } summary { cursor:pointer; color:var(--accent); }
+  code { background:#eef2f6; padding:1px 5px; border-radius:5px; font-size:.85em; }
+  .embed body { background:#fff; } .embed header, .embed details, .embed .credits { display:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Find your local government meetings</h1>
+    <p>Enter a U.S. address and get a calendar (<code>.ics</code>) of nearby council,
+       board, and commission meetings — with agendas where available.</p>
+  </header>
+
+  <form id="f">
+    <div>
+      <label for="address">Your address</label>
+      <input id="address" placeholder="250 Hamilton Ave, Palo Alto, CA" autocomplete="street-address">
+    </div>
+    <div class="row">
+      <div>
+        <label for="mode">Method</label>
+        <select id="mode">
+          <option value="nonai">Official sources (no AI)</option>
+          <option value="auto">Auto — official first, AI if none</option>
+          <option value="ai">AI web search</option>
+        </select>
+      </div>
+      <div>
+        <label for="months">Look ahead</label>
+        <select id="months">
+          <option value="2">2 months</option>
+          <option value="4" selected>4 months</option>
+          <option value="6">6 months</option>
+        </select>
+      </div>
+    </div>
+    <button type="submit">Find meetings</button>
+  </form>
+
+  <div id="status"></div>
+  <div class="tools" id="tools" hidden>
+    <button class="secondary" id="dlics">⬇ Download .ics</button>
+  </div>
+  <div id="results"></div>
+
+  <details class="credits">
+    <summary>Host or embed this</summary>
+    <p class="note">This page calls a small backend API (it proxies the U.S. Census
+      geocoder and the Legistar civic API, which don't allow direct browser calls).
+      Self-host with <code>python3 server.py</code>, or point this page at a deployed
+      backend by adding <code>?api=https://your-host</code> to the URL.</p>
+    <p class="note">Embed it anywhere:
+      <br><code>&lt;iframe src="https://YOUR-HOST/?embed=1" width="100%" height="640" style="border:0"&gt;&lt;/iframe&gt;</code></p>
+    <p class="note" id="apibox"></p>
+  </details>
+</div>
+
+<script>
+const qp = new URLSearchParams(location.search);
+let apiBase = (qp.get('api') || localStorage.getItem('lgm_api') || '').replace(/\/$/, '');
+if (qp.get('api')) localStorage.setItem('lgm_api', apiBase);
+if (qp.get('embed')) document.body.classList.add('embed');
+
+const $ = s => document.querySelector(s);
+const statusEl = $('#status'), results = $('#results'), tools = $('#tools');
+
+function api(path){ return apiBase + path; }
+
+async function health(){
+  try {
+    const r = await fetch(api('/api/health')); const j = await r.json();
+    if (!j.ai) {
+      const m = $('#mode');
+      [...m.options].forEach(o => { if (o.value==='ai') o.textContent += ' (disabled — no key on server)'; });
+    }
+    return true;
+  } catch(e){ return false; }
+}
+
+function fmtWhen(ev){
+  if (!ev.start) return 'Date TBD';
+  const d = new Date(ev.start);
+  if (ev.all_day) return d.toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'});
+  let s = d.toLocaleString(undefined,{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+  if (ev.recurring) s += ' · repeats';
+  return s;
+}
+function pad(n){ return String(n).padStart(2,'0'); }
+function gcalDates(ev){
+  const fmt = dd => `${dd.getFullYear()}${pad(dd.getMonth()+1)}${pad(dd.getDate())}`;
+  if (!ev.start) return null;
+  const s = new Date(ev.start);
+  if (ev.all_day){ const e=new Date(s); e.setDate(e.getDate()+1); return fmt(s)+'/'+fmt(e); }
+  const ft = dd => fmt(dd)+'T'+pad(dd.getHours())+pad(dd.getMinutes())+'00';
+  const e = ev.end ? new Date(ev.end) : new Date(s.getTime()+2*3600*1000);
+  return ft(s)+'/'+ft(e);
+}
+function gcal(ev){
+  const dates = gcalDates(ev); if (!dates) return null;
+  const p = new URLSearchParams({action:'TEMPLATE', text:ev.title,
+    details:(ev.description||'')+(ev.url?('\n'+ev.url):''), location:ev.location||'', dates});
+  return 'https://calendar.google.com/calendar/render?'+p.toString();
+}
+
+function render(data){
+  results.innerHTML = '';
+  if (data.matched) statusEl.textContent = 'Matched: '+data.matched+' — '+(data.sources.join(' · ')||'');
+  else statusEl.textContent = data.sources.join(' · ') || '';
+  if (!data.events.length){
+    results.innerHTML = '<p class="note">No meetings found. Try Auto or AI mode, or check '+
+      'whether your city publishes a Legistar calendar (look for <code>&lt;city&gt;.legistar.com</code>).</p>';
+    tools.hidden = true; return;
+  }
+  tools.hidden = false;
+  for (const ev of data.events){
+    const div = document.createElement('div');
+    div.className = 'meeting' + (ev.verified ? '' : ' unverified');
+    const g = gcal(ev);
+    const srcPill = ev.source && ev.source.startsWith('ai') ? '<span class="pill ai">AI</span>' :
+                    (ev.verified ? '' : '<span class="pill warn">unverified</span>');
+    div.innerHTML =
+      `<div class="when">${fmtWhen(ev)}</div>`+
+      `<div class="body">${esc(ev.title)} ${srcPill}</div>`+
+      (ev.location?`<div class="meta">📍 ${esc(ev.location)}</div>`:'')+
+      (ev.description?`<div class="meta">${esc(ev.description).slice(0,240)}</div>`:'')+
+      `<div style="margin-top:6px">`+
+        (ev.agenda_url?`<a href="${ev.agenda_url}" target="_blank" rel="noopener">Agenda</a>`:'')+
+        (ev.url?`<a href="${ev.url}" target="_blank" rel="noopener">Details</a>`:'')+
+        (g?`<a href="${g}" target="_blank" rel="noopener">+ Google Calendar</a>`:'')+
+      `</div>`;
+    results.appendChild(div);
+  }
+}
+function esc(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+function queryString(format){
+  const p = new URLSearchParams({ address:$('#address').value.trim(),
+    mode:$('#mode').value, months:$('#months').value });
+  if (format) p.set('format', format);
+  return p.toString();
+}
+
+$('#f').addEventListener('submit', async e => {
+  e.preventDefault();
+  if (!$('#address').value.trim()){ statusEl.textContent='Enter an address.'; return; }
+  statusEl.textContent = 'Looking up your jurisdictions…'; results.innerHTML=''; tools.hidden=true;
+  try {
+    const r = await fetch(api('/api/meetings?'+queryString()));
+    const j = await r.json();
+    if (j.error){ statusEl.textContent = 'Error: '+j.error; return; }
+    render(j);
+  } catch(err){
+    statusEl.innerHTML = 'Could not reach the backend API. '+
+      'If you are hosting the UI separately (e.g. GitHub Pages), set the API URL: '+
+      '<a href="#" id="setapi">configure backend</a>.';
+    document.getElementById('setapi')?.addEventListener('click', ev=>{
+      ev.preventDefault();
+      const u = prompt('Backend API base URL (where server.py runs):', apiBase||'https://');
+      if (u){ apiBase=u.replace(/\/$/,''); localStorage.setItem('lgm_api',apiBase); statusEl.textContent='Saved. Try again.'; }
+    });
+  }
+});
+
+$('#dlics').addEventListener('click', ()=>{ window.location = api('/api/meetings?'+queryString('ics')); });
+
+$('#apibox').textContent = apiBase ? ('Current backend: '+apiBase) : 'Backend: same origin as this page.';
+health().then(ok => { if (!ok && !apiBase) statusEl.innerHTML =
+  'This hosted UI needs a backend. Add <code>?api=https://your-server</code> to the URL '+
+  '(where <code>server.py</code> runs), then search. '+
+  '<a href="#" id="setapi0">set it now</a>.';
+  document.getElementById('setapi0')?.addEventListener('click', ev=>{ ev.preventDefault();
+    const u=prompt('Backend API base URL:', 'https://'); if(u){ apiBase=u.replace(/\/$/,'');
+    localStorage.setItem('lgm_api',apiBase); statusEl.textContent='Saved: '+apiBase; } }); });
+</script>
+</body>
+</html>
