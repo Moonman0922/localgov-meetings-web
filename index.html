@@ -39,6 +39,13 @@
   details { margin-top:24px; } summary { cursor:pointer; color:var(--accent); }
   code { background:#eef2f6; padding:1px 5px; border-radius:5px; font-size:.85em; }
   .embed body { background:#fff; } .embed header, .embed details, .embed .credits { display:none; }
+  .acwrap { position:relative; }
+  .ac { position:absolute; z-index:30; left:0; right:0; top:100%; margin:3px 0 0; padding:0;
+        list-style:none; background:#fff; border:1px solid var(--line); border-radius:8px;
+        box-shadow:0 8px 20px rgba(0,0,0,.10); max-height:240px; overflow:auto; }
+  .ac li { padding:8px 12px; cursor:pointer; font-size:.9rem; border-bottom:1px solid #f1f5f9; }
+  .ac li:last-child { border-bottom:0; }
+  .ac li:hover, .ac li.sel { background:#eef4f3; }
 </style>
 </head>
 <body>
@@ -50,9 +57,10 @@
   </header>
 
   <form id="f">
-    <div>
+    <div class="acwrap">
       <label for="address">Your address</label>
-      <input id="address" placeholder="250 Hamilton Ave, Palo Alto, CA" autocomplete="street-address">
+      <input id="address" placeholder="250 Hamilton Ave, Palo Alto, CA" autocomplete="off" aria-autocomplete="list">
+      <ul id="ac" class="ac" hidden></ul>
     </div>
     <div class="row">
       <div>
@@ -103,6 +111,47 @@ const $ = s => document.querySelector(s);
 const statusEl = $('#status'), results = $('#results'), tools = $('#tools');
 
 function api(path){ return apiBase + path; }
+
+// --- OpenStreetMap (Nominatim) address autocomplete ---
+const addr = $('#address'), acList = $('#ac');
+let acTimer = null, acItems = [], acIdx = -1;
+function acHide(){ acList.hidden = true; acList.innerHTML = ''; acItems = []; acIdx = -1; }
+function normAddr(x){
+  const a = x.address || {};
+  const city = a.city||a.town||a.village||a.hamlet||a.suburb||a.county||'';
+  const line = [[a.house_number,a.road].filter(Boolean).join(' '), city, a.state, a.postcode]
+                 .filter(Boolean).join(', ');
+  return line || x.display_name;
+}
+addr.addEventListener('input', ()=>{
+  const q = addr.value.trim();
+  clearTimeout(acTimer);
+  if (q.length < 4){ acHide(); return; }
+  acTimer = setTimeout(async ()=>{           // debounced to respect OSM usage policy
+    try {
+      const u = 'https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1'
+              + '&limit=5&countrycodes=us&q=' + encodeURIComponent(q);
+      const r = await fetch(u, { headers:{ 'Accept':'application/json' } });
+      acItems = await r.json(); acIdx = -1;
+      acList.innerHTML = acItems.map((x,i)=>`<li data-i="${i}">${esc(x.display_name)}</li>`).join('');
+      acList.hidden = acItems.length === 0;
+    } catch(e){ acHide(); }
+  }, 600);
+});
+acList.addEventListener('click', e=>{
+  const li = e.target.closest('li'); if (!li) return;
+  addr.value = normAddr(acItems[+li.dataset.i]); acHide(); addr.focus();
+});
+addr.addEventListener('keydown', e=>{
+  if (acList.hidden) return;
+  if (e.key==='ArrowDown' || e.key==='ArrowUp'){ e.preventDefault();
+    acIdx = (acIdx + (e.key==='ArrowDown'?1:-1) + acItems.length) % acItems.length;
+    [...acList.children].forEach((li,i)=>li.classList.toggle('sel', i===acIdx));
+  } else if (e.key==='Enter' && acIdx>=0){ e.preventDefault();
+    addr.value = normAddr(acItems[acIdx]); acHide();
+  } else if (e.key==='Escape'){ acHide(); }
+});
+document.addEventListener('click', e=>{ if (!e.target.closest('.acwrap')) acHide(); });
 
 async function health(){
   try {
