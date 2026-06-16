@@ -154,6 +154,7 @@ function render(data){
     const div = document.createElement('div');
     div.className = 'meeting' + (ev.verified ? '' : ' unverified');
     const g = gcal(ev);
+    const au = safeUrl(ev.agenda_url), du = safeUrl(ev.url);
     const srcPill = ev.source && ev.source.startsWith('ai') ? '<span class="pill ai">AI</span>' :
                     (ev.verified ? '' : '<span class="pill warn">unverified</span>');
     div.innerHTML =
@@ -162,14 +163,15 @@ function render(data){
       (ev.location?`<div class="meta">📍 ${esc(ev.location)}</div>`:'')+
       (ev.description?`<div class="meta">${esc(ev.description).slice(0,240)}</div>`:'')+
       `<div style="margin-top:6px">`+
-        (ev.agenda_url?`<a href="${ev.agenda_url}" target="_blank" rel="noopener">Agenda</a>`:'')+
-        (ev.url?`<a href="${ev.url}" target="_blank" rel="noopener">Details</a>`:'')+
-        (g?`<a href="${g}" target="_blank" rel="noopener">+ Google Calendar</a>`:'')+
+        (au?`<a href="${esc(au)}" target="_blank" rel="noopener">Agenda</a>`:'')+
+        (du?`<a href="${esc(du)}" target="_blank" rel="noopener">Details</a>`:'')+
+        (g?`<a href="${esc(g)}" target="_blank" rel="noopener">+ Google Calendar</a>`:'')+
       `</div>`;
     results.appendChild(div);
   }
 }
 function esc(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function safeUrl(u){ try { const p=new URL(u, location.href); return (p.protocol==='http:'||p.protocol==='https:')?p.href:''; } catch(e){ return ''; } }
 
 function queryString(format){
   const p = new URLSearchParams({ address:$('#address').value.trim(),
